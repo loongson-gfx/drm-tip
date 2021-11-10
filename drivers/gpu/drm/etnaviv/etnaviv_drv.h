@@ -43,6 +43,7 @@ struct etnaviv_drm_private {
 	/* list of GEM objects: */
 	struct mutex gem_lock;
 	struct list_head gem_list;
+	bool has_cached_coherent;
 };
 
 int etnaviv_ioctl_gem_submit(struct drm_device *dev, void *data,
@@ -81,6 +82,8 @@ bool etnaviv_cmd_validate_one(struct etnaviv_gpu *gpu,
 void etnaviv_gem_describe_objects(struct etnaviv_drm_private *priv,
 	struct seq_file *m);
 #endif
+
+extern const struct drm_driver etnaviv_drm_driver;
 
 #define DBG(fmt, ...) DRM_DEBUG(fmt"\n", ##__VA_ARGS__)
 #define VERB(fmt, ...) if (0) DRM_DEBUG(fmt"\n", ##__VA_ARGS__)

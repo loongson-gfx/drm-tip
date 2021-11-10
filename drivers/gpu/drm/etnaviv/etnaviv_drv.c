@@ -23,10 +23,13 @@
 #include "etnaviv_mmu.h"
 #include "etnaviv_perfmon.h"
 
+#ifdef CONFIG_DRM_ETNAVIV_PCI_DRIVER
+#include "etnaviv_pci_drv.h"
+#endif
+
 /*
  * DRM operations:
  */
-
 
 static void load_gpu(struct drm_device *dev)
 {
@@ -72,7 +75,7 @@ static int etnaviv_open(struct drm_device *dev, struct drm_file *file)
 			drm_sched_entity_init(&ctx->sched_entity[i],
 					      DRM_SCHED_PRIORITY_NORMAL, &sched,
 					      1, NULL);
-			}
+		}
 	}
 
 	file->driver_priv = ctx;
@@ -266,7 +269,7 @@ static int etnaviv_ioctl_gem_new(struct drm_device *dev, void *data,
 	struct drm_etnaviv_gem_new *args = data;
 
 	if (args->flags & ~(ETNA_BO_CACHED | ETNA_BO_WC | ETNA_BO_UNCACHED |
-			    ETNA_BO_FORCE_MMU))
+			    ETNA_BO_FORCE_MMU | ETNA_BO_CACHED_COHERENT))
 		return -EINVAL;
 
 	return etnaviv_gem_new_handle(dev, file, args->size,
@@ -470,7 +473,7 @@ static const struct drm_ioctl_desc etnaviv_ioctls[] = {
 
 DEFINE_DRM_GEM_FOPS(fops);
 
-static const struct drm_driver etnaviv_drm_driver = {
+const struct drm_driver etnaviv_drm_driver = {
 	.driver_features    = DRIVER_GEM | DRIVER_RENDER,
 	.open               = etnaviv_open,
 	.postclose           = etnaviv_postclose,
@@ -647,9 +650,28 @@ static struct platform_driver etnaviv_platform_driver = {
 
 static struct platform_device *etnaviv_drm;
 
-static int __init etnaviv_init(void)
+static int etnaviv_create_platform_device(const char *name, struct device_node *np)
 {
 	struct platform_device *pdev;
+	int ret;
+
+	pdev = platform_device_alloc(name, PLATFORM_DEVID_NONE);
+	if (!pdev)
+		return -ENOMEM;
+
+	ret = platform_device_add(pdev);
+	if (ret) {
+		platform_device_put(pdev);
+		return ret;
+	}
+
+	etnaviv_drm = pdev;
+
+	return 0;
+}
+
+static int __init etnaviv_init(void)
+{
 	int ret;
 	struct device_node *np;
 
@@ -663,6 +685,12 @@ static int __init etnaviv_init(void)
 	if (ret != 0)
 		goto unregister_gpu_driver;
 
+	if (IS_ENABLED(CONFIG_DRM_ETNAVIV_PCI_DRIVER)) {
+		ret = pci_register_driver(&etnaviv_pci_driver);
+		if (ret != 0)
+			goto unregister_platform_driver;
+	}
+
 	/*
 	 * If the DT contains at least one available GPU device, instantiate
 	 * the DRM platform device.
@@ -671,26 +699,20 @@ static int __init etnaviv_init(void)
 		if (!of_device_is_available(np))
 			continue;
 
-		pdev = platform_device_alloc("etnaviv", PLATFORM_DEVID_NONE);
-		if (!pdev) {
-			ret = -ENOMEM;
-			of_node_put(np);
-			goto unregister_platform_driver;
-		}
-
-		ret = platform_device_add(pdev);
-		if (ret) {
-			platform_device_put(pdev);
-			of_node_put(np);
-			goto unregister_platform_driver;
-		}
-
-		etnaviv_drm = pdev;
+		ret = etnaviv_create_platform_device("etnaviv", np);
 		of_node_put(np);
+
+		if (ret)
+			goto unregister_pci_driver;
+
 		break;
 	}
 
 	return 0;
+
+unregister_pci_driver:
+	if (IS_ENABLED(CONFIG_DRM_ETNAVIV_PCI_DRIVER))
+		pci_unregister_driver(&etnaviv_pci_driver);
 
 unregister_platform_driver:
 	platform_driver_unregister(&etnaviv_platform_driver);
@@ -703,6 +725,10 @@ module_init(etnaviv_init);
 static void __exit etnaviv_exit(void)
 {
 	platform_device_unregister(etnaviv_drm);
+
+	if (IS_ENABLED(CONFIG_DRM_ETNAVIV_PCI_DRIVER))
+		pci_unregister_driver(&etnaviv_pci_driver);
+
 	platform_driver_unregister(&etnaviv_platform_driver);
 	platform_driver_unregister(&etnaviv_gpu_driver);
 }
