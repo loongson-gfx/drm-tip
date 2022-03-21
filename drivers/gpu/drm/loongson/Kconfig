@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-2.0
+
+config DRM_LOONGSON
+	tristate "DRM support for Loongson Graphics"
+	depends on DRM && PCI
+	depends on LOONGARCH || MIPS || COMPILE_TEST
+	depends on OF
+	select DRM_KMS_HELPER
+	select DRM_TTM
+	select DRM_TTM_HELPER
+	help
+	  This is a DRM driver for Loongson graphics integrated in LS7A2000,
+	  LS7A1000, LS2K2000 and LS2K1000. Including the DC, GPU, encoders,
+	  and HDMI audio etc.
+
+	  If "M" is selected, the module will be called loongson.
+
+	  If in doubt, say "N".
