@@ -4,8 +4,6 @@
 #include <drm/drm_managed.h>
 #include <drm/drm_gem_vram_helper.h>
 #include "lsdc_drv.h"
-#include "lsdc_regs.h"
-#include "lsdc_pll.h"
 
 #ifdef CONFIG_DEBUG_FS
 static int lsdc_show_clock(struct seq_file *m, void *arg)
@@ -18,26 +16,26 @@ static int lsdc_show_clock(struct seq_file *m, void *arg)
 		struct lsdc_display_pipe *pipe = crtc_to_display_pipe(crtc);
 		struct lsdc_pll *pixpll = &pipe->pixpll;
 		const struct lsdc_pixpll_funcs *funcs = pixpll->funcs;
-		struct drm_display_mode *adj = &crtc->state->mode;
+		struct drm_display_mode *mode = &crtc->state->mode;
 		struct lsdc_pll_parms parms;
 		unsigned int out_khz;
 
 		out_khz = funcs->get_clock_rate(pixpll, &parms);
 
 		seq_printf(m, "Display pipe %u: %dx%d\n",
-			   pipe->index, adj->hdisplay, adj->vdisplay);
+			   pipe->index, mode->hdisplay, mode->vdisplay);
 
 		seq_printf(m, "Frequency actually output: %u kHz\n", out_khz);
-		seq_printf(m, "Pixel clock required: %d kHz\n", adj->clock);
-		seq_printf(m, "diff: %d kHz\n", adj->clock);
+		seq_printf(m, "Pixel clock required: %d kHz\n", mode->clock);
+		seq_printf(m, "diff: %d kHz\n", out_khz - mode->clock);
 
 		seq_printf(m, "div_ref=%u, loopc=%u, div_out=%u\n",
 			   parms.div_ref, parms.loopc, parms.div_out);
 
 		seq_printf(m, "hsync_start=%d, hsync_end=%d, htotal=%d\n",
-			   adj->hsync_start, adj->hsync_end, adj->htotal);
+			   mode->hsync_start, mode->hsync_end, mode->htotal);
 		seq_printf(m, "vsync_start=%d, vsync_end=%d, vtotal=%d\n\n",
-			   adj->vsync_start, adj->vsync_end, adj->vtotal);
+			   mode->vsync_start, mode->vsync_end, mode->vtotal);
 	}
 
 	return 0;
@@ -54,37 +52,38 @@ static int lsdc_show_mm(struct seq_file *m, void *arg)
 	return 0;
 }
 
-#define REGDEF(reg) { __stringify_1(LSDC_##reg##_REG), LSDC_##reg##_REG }
+#define REG_DEF(reg) { __stringify_1(LSDC_##reg##_REG), LSDC_##reg##_REG }
 static const struct {
 	const char *name;
 	u32 reg_offset;
 } lsdc_regs_array[] = {
-	REGDEF(CURSOR0_CFG),
-	REGDEF(CURSOR0_ADDR_LO),
-	REGDEF(CURSOR0_ADDR_HI),
-	REGDEF(CURSOR0_POSITION),
-	REGDEF(CURSOR0_BG_COLOR),
-	REGDEF(CURSOR0_FG_COLOR),
-	REGDEF(INT),
-	REGDEF(CRTC0_CFG),
-	REGDEF(CRTC0_STRIDE),
-	REGDEF(CRTC0_FB_ORIGIN),
-	REGDEF(CRTC0_HDISPLAY),
-	REGDEF(CRTC0_HSYNC),
-	REGDEF(CRTC0_VDISPLAY),
-	REGDEF(CRTC0_VSYNC),
-	REGDEF(CRTC0_GAMMA_INDEX),
-	REGDEF(CRTC0_GAMMA_DATA),
-	REGDEF(CRTC1_CFG),
-	REGDEF(CRTC1_STRIDE),
-	REGDEF(CRTC1_FB_ORIGIN),
-	REGDEF(CRTC1_HDISPLAY),
-	REGDEF(CRTC1_HSYNC),
-	REGDEF(CRTC1_VDISPLAY),
-	REGDEF(CRTC1_VSYNC),
-	REGDEF(CRTC1_GAMMA_INDEX),
-	REGDEF(CRTC1_GAMMA_DATA),
+	REG_DEF(CURSOR0_CFG),
+	REG_DEF(CURSOR0_ADDR_LO),
+	REG_DEF(CURSOR0_ADDR_HI),
+	REG_DEF(CURSOR0_POSITION),
+	REG_DEF(CURSOR0_BG_COLOR),
+	REG_DEF(CURSOR0_FG_COLOR),
+	REG_DEF(INT),
+	REG_DEF(CRTC0_CFG),
+	REG_DEF(CRTC0_STRIDE),
+	REG_DEF(CRTC0_FB_ORIGIN),
+	REG_DEF(CRTC0_HDISPLAY),
+	REG_DEF(CRTC0_HSYNC),
+	REG_DEF(CRTC0_VDISPLAY),
+	REG_DEF(CRTC0_VSYNC),
+	REG_DEF(CRTC0_GAMMA_INDEX),
+	REG_DEF(CRTC0_GAMMA_DATA),
+	REG_DEF(CRTC1_CFG),
+	REG_DEF(CRTC1_STRIDE),
+	REG_DEF(CRTC1_FB_ORIGIN),
+	REG_DEF(CRTC1_HDISPLAY),
+	REG_DEF(CRTC1_HSYNC),
+	REG_DEF(CRTC1_VDISPLAY),
+	REG_DEF(CRTC1_VSYNC),
+	REG_DEF(CRTC1_GAMMA_INDEX),
+	REG_DEF(CRTC1_GAMMA_DATA),
 };
+#undef REG_DEF
 
 static int lsdc_show_regs(struct seq_file *m, void *arg)
 {
@@ -169,6 +168,24 @@ static int lsdc_show_fb_addr(struct seq_file *m, void *arg)
 	return 0;
 }
 
+static int lsdc_trigger_flip_fb(struct seq_file *m, void *arg)
+{
+	struct drm_info_node *node = (struct drm_info_node *)m->private;
+	struct drm_device *ddev = node->minor->dev;
+	struct lsdc_device *ldev = to_lsdc(ddev);
+	u32 val;
+
+	val = lsdc_rreg32(ldev, LSDC_CRTC0_CFG_REG);
+	lsdc_wreg32(ldev, LSDC_CRTC0_CFG_REG, val | CFG_PAGE_FLIP);
+	seq_printf(m, "CRTC-0 flip triggered\n");
+
+	val = lsdc_rreg32(ldev, LSDC_CRTC1_CFG_REG);
+	lsdc_wreg32(ldev, LSDC_CRTC1_CFG_REG, val | CFG_PAGE_FLIP);
+	seq_printf(m, "CRTC-1 flip triggered\n");
+
+	return 0;
+}
+
 static struct drm_info_list lsdc_debugfs_list[] = {
 	{ "clocks",   lsdc_show_clock, 0 },
 	{ "mm",       lsdc_show_mm, 0, NULL },
@@ -176,6 +193,7 @@ static struct drm_info_list lsdc_debugfs_list[] = {
 	{ "vblanks",  lsdc_show_vblank_counter, 0, NULL },
 	{ "scan_pos", lsdc_show_scan_position, 0, NULL },
 	{ "fb_addr",  lsdc_show_fb_addr, 0, NULL },
+	{ "flip",     lsdc_trigger_flip_fb, 0, NULL },
 };
 
 #endif

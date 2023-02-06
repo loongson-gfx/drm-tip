@@ -244,10 +244,20 @@ enum lsdc_cursor_format {
 #define HDMI_PACKET_EN                  BIT(1)
 #define HDMI_AUDIO_EN                   BIT(2)
 #define HDMI_VIDEO_PREAMBLE_MASK        GENMASK(7, 4)
+#define HDMI_VIDEO_PREAMBLE_SHIFT       4
 #define HDMI_HW_I2C_EN                  BIT(8)
 #define HDMI_CTL_PERIOD_MODE            BIT(9)
 #define LSDC_HDMI0_CTRL_REG             0x1720
 #define LSDC_HDMI1_CTRL_REG             0x1730
+
+/*
+ * Preamble:
+ * Immediately preceding each video data period or data island period is the
+ * preamble. This is a sequence of eight identical control characters that
+ * indicate whether the upcoming data period is a video data period or is a
+ * data island. The values of CTL0, CTL1, CTL2, and CTL3 indicate the type of
+ * data period that follows.
+ */
 
 #define HDMI_PHY_EN                     BIT(0)
 #define HDMI_PHY_RESET_N                BIT(1)

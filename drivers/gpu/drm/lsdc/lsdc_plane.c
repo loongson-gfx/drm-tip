@@ -4,10 +4,9 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_plane_helper.h>
-#include <drm/drm_gem_vram_helper.h>
 #include "lsdc_drv.h"
 #include "lsdc_regs.h"
-#include "lsdc_pll.h"
+#include "lsdc_ttm.h"
 
 static const u32 lsdc_primary_formats[] = {
 	DRM_FORMAT_XRGB8888,
@@ -67,9 +66,9 @@ static void lsdc_update_fb_start_addr(struct lsdc_device *ldev,
 	/*
 	 * Find which framebuffer address register should update.
 	 * if FB_ADDR0_REG is in using, we write the address to FB_ADDR0_REG,
-	 * if FB_ADDR1_REG is in using, we write the address to FB_ADDR1_REG
-	 * for each CRTC, the switch using one fb register to another is
-	 * trigger by triggered by set CFG_PAGE_FLIP bit of LSDC_CRTCx_CFG_REG
+	 * if FB_ADDR1_REG is in using, we write the address to FB_ADDR1_REG.
+	 * For each CRTC, the switch from one fb register to another is
+	 * triggered by set CFG_PAGE_FLIP bit of LSDC_CRTCx_CFG_REG
 	 */
 	if (index == 0) {
 		val = lsdc_rreg32(ldev, LSDC_CRTC0_CFG_REG);
@@ -112,17 +111,6 @@ static unsigned int lsdc_get_fb_offset(struct drm_framebuffer *fb,
 	offset += fb->pitches[plane] * (state->src_y >> 16);
 
 	return offset;
-}
-
-static s64 lsdc_get_vram_bo_offset(struct drm_framebuffer *fb)
-{
-	struct drm_gem_vram_object *gbo;
-	s64 gpu_addr;
-
-	gbo = drm_gem_vram_of_gem(fb->obj[0]);
-	gpu_addr = drm_gem_vram_offset(gbo);
-
-	return gpu_addr;
 }
 
 static int lsdc_primary_plane_atomic_check(struct drm_plane *plane,
@@ -188,8 +176,8 @@ static void lsdc_primary_plane_atomic_disable(struct drm_plane *plane,
 }
 
 static const struct drm_plane_helper_funcs lsdc_primary_plane_helpers = {
-	.prepare_fb = drm_gem_vram_plane_helper_prepare_fb,
-	.cleanup_fb = drm_gem_vram_plane_helper_cleanup_fb,
+	.prepare_fb = lsdc_plane_prepare_fb,
+	.cleanup_fb = lsdc_plane_cleanup_fb,
 	.atomic_check = lsdc_primary_plane_atomic_check,
 	.atomic_update = lsdc_primary_plane_atomic_update,
 	.atomic_disable = lsdc_primary_plane_atomic_disable,
@@ -232,8 +220,8 @@ static int lsdc_cursor_atomic_check(struct drm_plane *plane,
  *
  * Update location of the cursor, attach it to CRTC0 or CRTC1 on the runtime.
  */
-static void lsdc_cursor_update_location_quirks(struct lsdc_device *ldev,
-					       struct drm_crtc *crtc)
+static void lsdc_cursor_update_location_quirk(struct lsdc_device *ldev,
+					      struct drm_crtc *crtc)
 {
 	u32 val = CURSOR_FORMAT_ARGB8888;
 
@@ -251,9 +239,9 @@ static void lsdc_cursor_update_location_quirks(struct lsdc_device *ldev,
 }
 
 /* update the position of the cursor */
-static void lsdc_cursor_update_position_quirks(struct lsdc_device *ldev,
-					       int x,
-					       int y)
+static void lsdc_cursor_update_position_quirk(struct lsdc_device *ldev,
+					      int x,
+					      int y)
 {
 	if (x < 0)
 		x = 0;
@@ -264,8 +252,8 @@ static void lsdc_cursor_update_position_quirks(struct lsdc_device *ldev,
 	lsdc_wreg32(ldev, LSDC_CURSOR0_POSITION_REG, (y << 16) | x);
 }
 
-static void lsdc_cursor_atomic_update_quirks(struct drm_plane *plane,
-					     struct drm_atomic_state *state)
+static void lsdc_cursor_atomic_update_quirk(struct drm_plane *plane,
+					    struct drm_atomic_state *state)
 {
 	struct drm_device *ddev = plane->dev;
 	struct lsdc_device *ldev = to_lsdc(ddev);
@@ -284,9 +272,9 @@ static void lsdc_cursor_atomic_update_quirks(struct drm_plane *plane,
 		lsdc_wreg32(ldev, LSDC_CURSOR0_ADDR_HI_REG, (cursor_addr >> 32) & 0xFF);
 	}
 
-	lsdc_cursor_update_position_quirks(ldev, new_plane_state->crtc_x, new_plane_state->crtc_y);
+	lsdc_cursor_update_position_quirk(ldev, new_plane_state->crtc_x, new_plane_state->crtc_y);
 
-	lsdc_cursor_update_location_quirks(ldev, new_plane_state->crtc);
+	lsdc_cursor_update_location_quirk(ldev, new_plane_state->crtc);
 }
 
 /* update the format, size and location of the cursor */
@@ -328,8 +316,8 @@ static void lsdc_cursor_atomic_update(struct drm_plane *plane,
 	}
 }
 
-static void lsdc_cursor_atomic_disable_quirks(struct drm_plane *plane,
-					      struct drm_atomic_state *state)
+static void lsdc_cursor_atomic_disable_quirk(struct drm_plane *plane,
+					     struct drm_atomic_state *state)
 {
 	struct drm_device *ddev = plane->dev;
 	struct lsdc_device *ldev = to_lsdc(ddev);
@@ -356,16 +344,16 @@ static void lsdc_cursor_atomic_disable(struct drm_plane *plane,
 }
 
 static const struct drm_plane_helper_funcs lsdc_cursor_helpers_quirk = {
-	.prepare_fb = drm_gem_vram_plane_helper_prepare_fb,
-	.cleanup_fb = drm_gem_vram_plane_helper_cleanup_fb,
+	.prepare_fb = lsdc_plane_prepare_fb,
+	.cleanup_fb = lsdc_plane_cleanup_fb,
 	.atomic_check = lsdc_cursor_atomic_check,
-	.atomic_update = lsdc_cursor_atomic_update_quirks,
-	.atomic_disable = lsdc_cursor_atomic_disable_quirks,
+	.atomic_update = lsdc_cursor_atomic_update_quirk,
+	.atomic_disable = lsdc_cursor_atomic_disable_quirk,
 };
 
 static const struct drm_plane_helper_funcs lsdc_cursor_plane_helpers = {
-	.prepare_fb = drm_gem_vram_plane_helper_prepare_fb,
-	.cleanup_fb = drm_gem_vram_plane_helper_cleanup_fb,
+	.prepare_fb = lsdc_plane_prepare_fb,
+	.cleanup_fb = lsdc_plane_cleanup_fb,
 	.atomic_check = lsdc_cursor_atomic_check,
 	.atomic_update = lsdc_cursor_atomic_update,
 	.atomic_disable = lsdc_cursor_atomic_disable,

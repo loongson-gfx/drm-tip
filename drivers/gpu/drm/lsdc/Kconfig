@@ -7,7 +7,6 @@ config DRM_LSDC
 	select DRM_KMS_HELPER
 	select DRM_TTM
 	select DRM_TTM_HELPER
-	select DRM_VRAM_HELPER
 	default m
 	help
 	  This is a KMS driver for loongson display controller in the

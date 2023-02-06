@@ -21,7 +21,7 @@ struct ls7a1000_pixpll_bitmap {
 	unsigned div_ref      : 7;   /*  0 : 6     input clock divider   */
 	unsigned locked       : 1;   /*  7         PLL locked status     */
 	unsigned sel_out      : 1;   /*  8         output clk selector   */
-	unsigned __3          : 2;   /*  9 : 10    reserved              */
+	unsigned __3          : 2;   /*  9 : 10                          */
 	unsigned set_param    : 1;   /*  11        trigger the update    */
 	unsigned bypass       : 1;   /*  12                              */
 	unsigned powerdown    : 1;   /*  13                              */
@@ -107,9 +107,9 @@ static const struct pixclk_to_pll_parm pll_param_table[] = {
 						/* 1920x1080@50Hz */
 	{174500, 1920, 1080, 75, 17, 89,  3},   /* 1920x1080@75Hz */
 	{181250, 2560, 1080, 75,  8, 58,  4},   /* 2560x1080@75Hz */
+	{297000, 2560, 1080, 60,  8, 95,  4},   /* 2560x1080@75Hz */
 	{146250, 1680, 1050, 60, 16, 117, 5},   /* 1680x1050@60Hz */
 	{135000, 1280, 1024, 75, 10, 54,  4},   /* 1280x1024@75Hz */
-
 	{108000, 1600, 900,  60, 15, 81,  5},   /* 1600x900@60Hz  */
 						/* 1280x1024@60Hz */
 						/* 1280x960@60Hz */
@@ -169,7 +169,7 @@ static int lsdc_pixpll_setup(struct lsdc_pll * const this)
  */
 static bool lsdc_pixpll_find(struct lsdc_pll * const this,
 			     unsigned int clock,
-			     struct lsdc_pll_parms * const pout)
+			     struct lsdc_pll_parms *pout)
 {
 	unsigned int num = ARRAY_SIZE(pll_param_table);
 	unsigned int i;

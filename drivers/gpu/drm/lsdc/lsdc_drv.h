@@ -14,7 +14,6 @@
 
 #include <linux/i2c.h>
 #include <linux/i2c-algo-bit.h>
-
 #include <drm/drm_print.h>
 #include <drm/drm_device.h>
 #include <drm/drm_crtc.h>
@@ -23,7 +22,7 @@
 #include <drm/drm_encoder.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_atomic.h>
-
+#include <drm/ttm/ttm_device.h>
 #include "lsdc_regs.h"
 #include "lsdc_pll.h"
 
@@ -113,7 +112,7 @@
  *
  * LS7A1000 and LS7A2000 are bridge chips, has dedicated Video RAM.
  * while LS2K2000/LS2K1000/LS2K0500 are SoC, they don't have dediacated
- * Video RAM. The dc in LS2K2000 is basicly same with the dc in LS7A1000
+ * Video RAM. The dc in LS2K2000 is basicly same with the dc in LS7A2000
  * except that LS2K2000 don't have a video RAM and have only one built-in
  * hdmi encoder.
  *
@@ -217,9 +216,9 @@ struct lsdc_device {
 	spinlock_t reglock;
 	void __iomem *reg_base;
 	void __iomem *vram;
+	struct ttm_device bdev;
 	resource_size_t vram_base;
 	resource_size_t vram_size;
-	u64 mc_mask;
 
 	struct lsdc_display_pipe dispipe[LSDC_NUM_CRTC];
 
@@ -236,6 +235,12 @@ static inline struct lsdc_device *
 to_lsdc(struct drm_device *ddev)
 {
 	return container_of(ddev, struct lsdc_device, base);
+}
+
+static inline struct lsdc_device *
+bdev_to_lsdc(struct ttm_device *bdev)
+{
+	return container_of(bdev, struct lsdc_device, bdev);
 }
 
 static inline struct lsdc_crtc_state *

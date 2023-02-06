@@ -9,6 +9,7 @@ lsdc-y := \
 	lsdc_i2c.o \
 	lsdc_output.o \
 	lsdc_regs.o \
+	lsdc_ttm.o \
 	lsdc_debugfs.o
 
 obj-$(CONFIG_DRM_LSDC) += lsdc.o

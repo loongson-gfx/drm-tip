@@ -13,15 +13,17 @@
 #include <linux/pci.h>
 #include <linux/of_address.h>
 #include <drm/drm_aperture.h>
+#include <drm/drm_ioctl.h>
+#include <drm/drm_gem.h>
 #include <drm/drm_vblank.h>
 #include <drm/drm_fb_helper.h>
-#include <drm/drm_gem_vram_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_modeset_helper.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_fbdev_generic.h>
 #include "lsdc_drv.h"
+#include "lsdc_ttm.h"
 
 static int lsdc_chip = -1;
 MODULE_PARM_DESC(chip, "override chip id (-1 = probed by driver");
@@ -29,12 +31,12 @@ module_param_named(chip, lsdc_chip, int, 0644);
 
 /*
  * ls7a1000 and ls7a2000 is not only used with loongson desktop class CPU
- * but also loongson server class CPUs (LS3C5000@2.2GHz 16 core). Loongson
- * server products generally don't has a dedicated vram mounted for cost
- * reason, it will use aspeed bmc as its display on its final and formal
- * product. lsdc.has_vram=0 is mainly be use in developing phase of the
- * product. When a board don't has a dedicated vram mounted, we can put
- * the framebuffer on system RAM.
+ * but also loongson SoC and server class CPUs (LS3C5000@2.2GHz 16 core).
+ * Loongson SoC and server products generally don't has a dedicated vram
+ * mounted for cost reason, Loongson server will use aspeed bmc as its
+ * display on its formal product. lsdc.has_vram=0 can be use in development
+ * phase of the product. When a board don't has a dedicated vram mounted,
+ * we can still put the framebuffer on system RAM.
  */
 static int lsdc_has_vram = -1;
 MODULE_PARM_DESC(has_vram, "has on-board gpu memory in reality (0 = no, -1 = default");
@@ -138,16 +140,6 @@ static const struct lsdc_desc dc_in_ls7a2000 = {
 	.is_soc = false,
 };
 
-static int lsdc_gem_dumb_create(struct drm_file *file,
-				struct drm_device *ddev,
-				struct drm_mode_create_dumb *args)
-{
-	struct lsdc_device *ldev = to_lsdc(ddev);
-	const struct lsdc_desc *descp = ldev->descp;
-
-	return drm_gem_vram_fill_create_dumb(file, ddev, 0, descp->pitch_align, args);
-}
-
 DEFINE_DRM_GEM_FOPS(lsdc_gem_fops);
 
 static const struct drm_driver lsdc_drm_driver = {
@@ -163,7 +155,7 @@ static const struct drm_driver lsdc_drm_driver = {
 
 	.debugfs_init = lsdc_debugfs_init,
 	.dumb_create = lsdc_gem_dumb_create,
-	.dumb_map_offset = drm_gem_ttm_dumb_map_offset,
+	.dumb_map_offset = lsdc_dumb_map_offset,
 	.gem_prime_mmap = drm_gem_prime_mmap,
 };
 
@@ -172,7 +164,7 @@ static const struct drm_mode_config_funcs lsdc_mode_config_funcs = {
 	.output_poll_changed = drm_fb_helper_output_poll_changed,
 	.atomic_check = drm_atomic_helper_check,
 	.atomic_commit = drm_atomic_helper_commit,
-	.mode_valid = drm_vram_helper_mode_valid,
+	.mode_valid = lsdc_bo_mode_valid,
 };
 
 static int lsdc_modeset_init(struct lsdc_device *ldev,
@@ -262,7 +254,7 @@ static const struct lsdc_desc *
 lsdc_detect_chip(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
 	/*
-	 * Provide a way to false the driver running on new model
+	 * Provide a way to force the driver running on new model
 	 * before we have a proper way to tell them apart
 	 */
 	if (lsdc_chip == CHIP_LS2K2000) {
@@ -340,7 +332,7 @@ static int lsdc_get_dedicated_vram(struct lsdc_device *ldev,
  * Loongson display controller is not equipped with IOMMU.
  * In order to make this driver work with Loongson SoC,
  * you need to either carveout part RAM as VRAM or reserve
- * part system ram as vram. Pass the start address and size
+ * part system RAM as VRAM. Pass the start address and size
  * via DT or ACPI.
  */
 static int lsdc_of_get_reserved_ram(struct lsdc_device *ldev)
@@ -432,16 +424,16 @@ lsdc_create_device(struct pci_dev *pdev,
 		return ERR_PTR(ret);
 	}
 
-	ret = drmm_vram_helper_init(ddev, ldev->vram_base, ldev->vram_size);
+	ret = lsdc_ttm_init(ldev);
 	if (ret) {
-		drm_err(ddev, "vram helper init failed: %d\n", ret);
+		drm_err(ddev, "bo manager init failed: %d\n", ret);
 		goto err;
 	}
 
 	ret = lsdc_mode_config_init(ddev, descp);
 	if (ret) {
 		drm_dbg(ddev, "%s: %d\n", __func__, ret);
-		goto err;
+		return ERR_PTR(ret);
 	}
 
 	ret = lsdc_modeset_init(ldev, descp);
@@ -606,19 +598,15 @@ static int __init lsdc_module_init(void)
 	struct pci_dev *pdev = NULL;
 
 	if (drm_firmware_drivers_only())
-		return -EINVAL;
-
+		return -ENODEV;
+/*
 	while ((pdev = pci_get_class(PCI_CLASS_DISPLAY_VGA << 8, pdev))) {
-		/*
-		 * Multiple video card workaround: lsdc will always be
-		 * selected as the default boot device by vgaarb subsystem.
-		 */
 		if (pdev->vendor != PCI_VENDOR_ID_LOONGSON) {
 			pr_info("Discrete graphic card detected, abort\n");
 			return 0;
 		}
 	}
-
+*/
 	return pci_register_driver(&lsdc_pci_driver);
 }
 module_init(lsdc_module_init);
