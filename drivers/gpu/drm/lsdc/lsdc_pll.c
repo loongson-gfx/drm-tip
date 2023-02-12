@@ -462,7 +462,8 @@ static unsigned int lsdc_get_clock_rate(struct lsdc_pll * const this,
 	unsigned int out;
 	union lsdc_pixpll_bitmap parms;
 
-	if (descp->chip == CHIP_LS7A1000 || descp->chip == CHIP_LS7A2000) {
+	if (descp->chip == CHIP_LS7A1000 || descp->chip == CHIP_LS7A2000 ||
+	    descp->chip == CHIP_LS2K2000) {
 		struct ls7a1000_pixpll_bitmap *obj = &parms.ls7a1000;
 
 		parms.dword[0] = readl(this->mmio);
@@ -536,7 +537,7 @@ int lsdc_pixpll_init(struct lsdc_pll * const this,
 	this->index = index;
 	this->ref_clock = LSDC_PLL_REF_CLK;
 
-	/* LS7A1000 and LS7A2000's pixpll setting registers is same */
+	/* LS7A1000, LS7A2000 and LS2K2000's pixpll setting registers is same */
 	if (descp->chip == CHIP_LS7A2000 || descp->chip == CHIP_LS7A1000) {
 		if (index == 0)
 			this->reg_base = LS7A1000_CFG_REG_BASE + LS7A1000_PIX_PLL0_REG;

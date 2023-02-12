@@ -161,6 +161,48 @@ struct lsdc_i2c {
 	u8 scl;
 };
 
+struct lsdc_cursor;
+
+/* cursor helper funcs for lowing */
+struct lsdc_cursor_lowing_funcs {
+	void (*update_position)(struct lsdc_cursor * const this, int x, int y);
+	void (*update_config)(struct lsdc_cursor * const this, u32 cfg);
+	void (*update_image)(struct lsdc_cursor * const this, const u8 *src, int width, int height);
+	void (*update_base_addr)(struct lsdc_cursor * const this, u64 offset);
+};
+
+struct lsdc_cursor {
+	struct drm_plane base;
+	const struct lsdc_cursor_lowing_funcs *funcs;
+	struct lsdc_device *ldev;
+	dma_addr_t dma_addr;
+	void __iomem *vaddr;
+	u64 offset;
+	u32 cfg;
+
+};
+
+struct lsdc_primary;
+
+struct lsdc_primary_lowing_funcs {
+	void (*update_stride)(struct lsdc_primary * const this, u32 pitch);
+	void (*update_format)(struct lsdc_primary * const this, u32 format);
+	void (*update_base_addr)(struct lsdc_primary * const this, u64 offset);
+};
+
+struct lsdc_primary {
+	struct drm_plane base;
+	const struct lsdc_primary_lowing_funcs *funcs;
+	struct lsdc_device *ldev;
+	dma_addr_t dma_addr;
+	u32 fmt;
+};
+
+static inline struct lsdc_cursor *to_lsdc_cursor(struct drm_plane *plane)
+{
+	return container_of(plane, struct lsdc_cursor, base);
+}
+
 /*
  * struct lsdc_display_pipe - Abstraction of hardware display pipeline.
  * @crtc: CRTC control structure
@@ -172,14 +214,20 @@ struct lsdc_i2c {
  */
 struct lsdc_display_pipe {
 	struct drm_crtc crtc;
-	struct drm_plane primary;
-	struct drm_plane cursor;
+	struct lsdc_primary primary;
+	struct lsdc_cursor cursor;
 	struct drm_encoder encoder;
 	struct drm_connector connector;
 	struct lsdc_pll pixpll;
 	struct lsdc_i2c *li2c;
 	int index;
 };
+
+static inline struct lsdc_primary *to_lsdc_primary(struct drm_plane *plane)
+{
+	return container_of(plane, struct lsdc_primary, base);
+}
+
 
 static inline struct lsdc_display_pipe *
 crtc_to_display_pipe(struct drm_crtc *crtc)
@@ -190,7 +238,13 @@ crtc_to_display_pipe(struct drm_crtc *crtc)
 static inline struct lsdc_display_pipe *
 cursor_to_display_pipe(struct drm_plane *cursor)
 {
-	return container_of(cursor, struct lsdc_display_pipe, cursor);
+	return container_of(cursor, struct lsdc_display_pipe, cursor.base);
+}
+
+static inline struct lsdc_display_pipe *
+primary_to_display_pipe(struct drm_plane *primary)
+{
+	return container_of(primary, struct lsdc_display_pipe, primary.base);
 }
 
 static inline struct lsdc_display_pipe *

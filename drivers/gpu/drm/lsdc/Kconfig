@@ -5,9 +5,7 @@ config DRM_LSDC
 	depends on DRM && PCI && (MACH_LOONGSON64 || LOONGARCH || MIPS)
 	select OF
 	select DRM_KMS_HELPER
-	select DRM_TTM
-	select DRM_TTM_HELPER
-	select DRM_VRAM_HELPER
+	select DRM_GEM_SHMEM_HELPER
 	default m
 	help
 	  This is a KMS driver for loongson display controller in the

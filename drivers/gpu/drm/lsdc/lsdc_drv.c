@@ -15,8 +15,8 @@
 #include <drm/drm_aperture.h>
 #include <drm/drm_vblank.h>
 #include <drm/drm_fb_helper.h>
-#include <drm/drm_gem_vram_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_modeset_helper.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_probe_helper.h>
@@ -138,22 +138,11 @@ static const struct lsdc_desc dc_in_ls7a2000 = {
 	.is_soc = false,
 };
 
-static int lsdc_gem_dumb_create(struct drm_file *file,
-				struct drm_device *ddev,
-				struct drm_mode_create_dumb *args)
-{
-	struct lsdc_device *ldev = to_lsdc(ddev);
-	const struct lsdc_desc *descp = ldev->descp;
-
-	return drm_gem_vram_fill_create_dumb(file, ddev, 0, descp->pitch_align, args);
-}
-
 DEFINE_DRM_GEM_FOPS(lsdc_gem_fops);
 
 static const struct drm_driver lsdc_drm_driver = {
 	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_ATOMIC,
 	.fops = &lsdc_gem_fops,
-
 	.name = DRIVER_NAME,
 	.desc = DRIVER_DESC,
 	.date = DRIVER_DATE,
@@ -162,17 +151,13 @@ static const struct drm_driver lsdc_drm_driver = {
 	.patchlevel = DRIVER_PATCHLEVEL,
 
 	.debugfs_init = lsdc_debugfs_init,
-	.dumb_create = lsdc_gem_dumb_create,
-	.dumb_map_offset = drm_gem_ttm_dumb_map_offset,
-	.gem_prime_mmap = drm_gem_prime_mmap,
+	DRM_GEM_SHMEM_DRIVER_OPS,
 };
 
 static const struct drm_mode_config_funcs lsdc_mode_config_funcs = {
-	.fb_create = drm_gem_fb_create,
-	.output_poll_changed = drm_fb_helper_output_poll_changed,
+	.fb_create = drm_gem_fb_create_with_dirty,
 	.atomic_check = drm_atomic_helper_check,
 	.atomic_commit = drm_atomic_helper_commit,
-	.mode_valid = drm_vram_helper_mode_valid,
 };
 
 static int lsdc_modeset_init(struct lsdc_device *ldev,
@@ -192,8 +177,8 @@ static int lsdc_modeset_init(struct lsdc_device *ldev,
 	for (i = 0; i < num_crtc; i++) {
 		struct lsdc_display_pipe *dispipe = &ldev->dispipe[i];
 		struct lsdc_pll *pixpll = &dispipe->pixpll;
-		struct drm_plane *primary = &dispipe->primary;
-		struct drm_plane *cursor = &dispipe->cursor;
+		struct drm_plane *primary = &dispipe->primary.base;
+		struct drm_plane *cursor = &dispipe->cursor.base;
 		struct drm_crtc *crtc = &dispipe->crtc;
 
 		dispipe->index = i;
@@ -244,7 +229,7 @@ static int lsdc_mode_config_init(struct drm_device *ddev,
 	ddev->mode_config.max_width = descp->max_width * LSDC_NUM_CRTC;
 	ddev->mode_config.max_height = descp->max_height * LSDC_NUM_CRTC;
 	ddev->mode_config.preferred_depth = 24;
-	ddev->mode_config.prefer_shadow = descp->has_vram;
+	ddev->mode_config.prefer_shadow = 0;
 
 	ddev->mode_config.cursor_width = descp->hw_cursor_h;
 	ddev->mode_config.cursor_height = descp->hw_cursor_h;
@@ -252,7 +237,7 @@ static int lsdc_mode_config_init(struct drm_device *ddev,
 	/* max_vblank_count is set on each CRTC */
 	ddev->max_vblank_count = 0xffffffff;
 
-	return ret;
+	return 0;
 }
 
 /*
@@ -432,11 +417,11 @@ lsdc_create_device(struct pci_dev *pdev,
 		return ERR_PTR(ret);
 	}
 
-	ret = drmm_vram_helper_init(ddev, ldev->vram_base, ldev->vram_size);
-	if (ret) {
-		drm_err(ddev, "vram helper init failed: %d\n", ret);
-		goto err;
-	}
+	ldev->vram = devm_ioremap_wc(&pdev->dev, ldev->vram_base, ldev->vram_size);
+	if (!ldev->vram)
+		return ERR_PTR(-ENOMEM);
+
+	drm_info(ddev, "ldev->vram = 0x%llx\n", (u64)ldev->vram);
 
 	ret = lsdc_mode_config_init(ddev, descp);
 	if (ret) {
