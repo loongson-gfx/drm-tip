@@ -46,7 +46,7 @@ enum lsdc_pixel_format {
  * feature, you need to set this bit.
  */
 #define CFG_HW_CLONE_EN                 BIT(9)
-/* Indicate witch fb addr reg is in using, currently */
+/* Indicate witch fb addr reg is in using, currently. read only */
 #define CFG_FB_IN_USING                 BIT(11)
 #define CFG_GAMMA_EN                    BIT(12)
 
@@ -176,6 +176,8 @@ enum lsdc_cursor_format {
  * IDBU: Internal Data Buffer Underflow
  * IDBFU: Internal Data Buffer Fatal Underflow
  * CBRF: Cursor Buffer Read Finished Flag, no use.
+ * FBRF0: display pipe 0 reading from its framebuffer finished.
+ * FBRF1: display pipe 0 reading from its framebuffer finished.
  *
  * +-------+--------------------------+-------+--------+--------+-------+
  * | 31:27 |         26:16            | 15:11 |   10   |   9    |   8   |
@@ -183,11 +185,11 @@ enum lsdc_cursor_format {
  * |  N/A  | Interrupt Enable Control |  N/A  | IDBFU0 | IDBFU1 | IDBU0 |
  * +-------+--------------------------+-------+--------+--------+-------+
  *
- * +-------+-----+-----+------+--------+--------+--------+--------+
- * |   7   |  6  |  5  |  4   |   3    |   2    |   1    |   0    |
- * +-------+-----+-----+------+--------+--------+--------+--------+
- * | IDBU1 | RF0 | RF1 | CRRF | HSYNC0 | VSYNC0 | HSYNC1 | VSYNC1 |
- * +-------+-----+-----+------+--------+--------+--------+--------+
+ * +-------+-------+-------+------+--------+--------+--------+--------+
+ * |   7   |   6   |   5   |  4   |   3    |   2    |   1    |   0    |
+ * +-------+-------+-------+------+--------+--------+--------+--------+
+ * | IDBU1 | FBRF0 | FBRF1 | CRRF | HSYNC0 | VSYNC0 | HSYNC1 | VSYNC1 |
+ * +-------+-------+-------+------+--------+--------+--------+--------+
  *
  * unfortunately, CRTC0's interrupt is mess with CRTC1's interrupt in one
  * register again.

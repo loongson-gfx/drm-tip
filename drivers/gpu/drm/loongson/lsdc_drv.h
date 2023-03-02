@@ -25,6 +25,7 @@
 #include "lsdc_pll.h"
 #include "lsdc_regs.h"
 
+/* Currently, all display controllers of loongson have two display pipes */
 #define LSDC_NUM_CRTC           2
 
 /*
@@ -32,18 +33,10 @@
  * They are equipped on-board Video RAM. While LS2K2000/LS2K1000 are SoC,
  * they don't have dediacated Video RAM.
  *
- * The display controller in LS7A2000 has two display pipe, LS7A2000 has also
- * integrated three encoders, display pipe 0 is attached with a transparent
- * VGA encoder and a HDMI phy, they are parallel. Display pipe 1 has only
- * one HDMI phy attached. Currently, all display controllers of loongson
- * have jsut two display pipes.
- *
- * There is only a 1:1 mapping of crtcs, encoders and connectors for the DC,
- * display pipe 0 = crtc0 + dvo0 + encoder0 + connector0 + cursor0 + primary0
- * display pipe 1 = crtc1 + dvo1 + encoder1 + connectro1 + cursor1 + primary1
- * Each CRTC have two FB address registers.
- *
- *
+ * The display controller in LS7A2000 has two display pipe, yet it has three
+ * integrated encoders, display pipe 0 is attached with a transparent VGA
+ * encoder and a HDMI phy, they are parallel. Display pipe 1 has only one
+ * HDMI phy connected.
  *       ______________________                          _____________
  *      |             +-----+  |                        |             |
  *      | CRTC0 -+--> | VGA |  ----> VGA Connector ---> | VGA Monitor |<---+
@@ -87,10 +80,17 @@
  *      |            -------|                                   |_________|
  *      |___________________|
  *
+ * There is only a 1:1 mapping of crtcs, encoders and connectors for the DC,
+ * display pipe 0 = crtc0 + dvo0 + encoder0 + connector0 + cursor0 + primary0
+ * display pipe 1 = crtc1 + dvo1 + encoder1 + connectro1 + cursor1 + primary1
+ * Each CRTC has two FB address registers.
+ *
  * The DC in LS7A1000/LS2K1000 has the pci vendor/device ID: 0x0014:0x7a06,
- * The DC in LS7A2000/LS2K2000 has the pci vendor/device ID: 0x0014:0x7a36,
- * LS7A1000 and LS7A2000 can only be used with LS3A4000 and LS3A5000 CPU,
- * thus, CPU PRID can be used to make a distinction.
+ * The DC in LS7A2000/LS2K2000 has the pci vendor/device ID: 0x0014:0x7a36.
+ *
+ * LS7A1000 and LS7A2000 can only be used with LS3A3000, LS3A4000, LS3A5000
+ * desktop class CPUs, thus CPU PRID can be used to differentiate those SoC
+ * and the desktop level CPU on the runtime.
  */
 
 enum loongson_chip_family {
@@ -108,10 +108,10 @@ struct lsdc_desc {
 	u32 num_of_hw_cursor;
 	u32 hw_cursor_w;
 	u32 hw_cursor_h;
-	u32 pitch_align;  /* DMA alignment constraint */
-	u64 mc_bits;      /* physical address bus bit width */
+	u32 pitch_align;         /* CRTC DMA alignment constraint */
+	u64 mc_bits;             /* physical address bus bit width */
 	bool has_vblank_counter; /* 32 bit hw vsync counter */
-	bool has_scan_pos;      /* crtc scan position recorder */
+	bool has_scan_pos;       /* CRTC scan position recorder */
 	bool has_builtin_i2c;
 	bool has_vram;
 	bool has_hpd_reg;
@@ -170,6 +170,11 @@ struct lsdc_crtc_state {
 	struct lsdc_pll_parms pparms;
 };
 
+struct lsdc_gem {
+	struct mutex mutex;
+	struct list_head objects;
+};
+
 struct lsdc_device {
 	struct drm_device base;
 	struct ttm_device bdev;
@@ -184,26 +189,25 @@ struct lsdc_device {
 
 	struct lsdc_display_pipe dispipe[LSDC_NUM_CRTC];
 
+	struct lsdc_gem gem;
+
 	/* @num_output: count the number of active display pipe */
 	unsigned int num_output;
 
 	u32 irq_status;
 };
 
-static inline struct lsdc_device *
-tdev_to_lsdc(struct ttm_device *bdev)
+static inline struct lsdc_device *tdev_to_ldev(struct ttm_device *bdev)
 {
 	return container_of(bdev, struct lsdc_device, bdev);
 }
 
-static inline struct lsdc_device *
-to_lsdc(struct drm_device *ddev)
+static inline struct lsdc_device *to_lsdc(struct drm_device *ddev)
 {
 	return container_of(ddev, struct lsdc_device, base);
 }
 
-static inline struct lsdc_crtc_state *
-to_lsdc_crtc_state(struct drm_crtc_state *base)
+static inline struct lsdc_crtc_state *to_lsdc_crtc_state(struct drm_crtc_state *base)
 {
 	return container_of(base, struct lsdc_crtc_state, base);
 }

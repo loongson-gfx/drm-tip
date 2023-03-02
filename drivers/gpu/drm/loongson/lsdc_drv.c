@@ -15,6 +15,7 @@
 #include <drm/drm_vblank.h>
 
 #include "lsdc_drv.h"
+#include "lsdc_gem.h"
 #include "lsdc_output.h"
 #include "lsdc_ttm.h"
 
@@ -91,6 +92,9 @@ static const struct drm_driver lsdc_drm_driver = {
 	.debugfs_init = lsdc_debugfs_init,
 	.dumb_create = lsdc_dumb_create,
 	.dumb_map_offset = lsdc_dumb_map_offset,
+	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
+	.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
+	.gem_prime_import_sg_table = lsdc_prime_import_sg_table,
 	.gem_prime_mmap = drm_gem_prime_mmap,
 };
 
@@ -300,6 +304,8 @@ lsdc_create_device(struct pci_dev *pdev,
 		return ERR_PTR(ret);
 	}
 
+	lsdc_gem_init(ddev);
+
 	ret = lsdc_mode_config_init(ddev, descp);
 	if (ret)
 		return ERR_PTR(ret);
@@ -464,15 +470,14 @@ static int __init loongson_module_init(void)
 		return -ENODEV;
 
 	/*
-	 * Ah, it seems weird to write code like below, but our intention is
-	 * don't crash the entire system before a final decision is made.
 	 * We intend to write a all-in-one driver which can rules them all.
+	 * But before this driver could provide support for loongson SoC
+	 * formally, we would like to drop it temporarily.
 	 */
 	if (lsdc_is_ls2k1000() || lsdc_is_ls2k2000())
 		return -ENODEV;
 
 	while ((pdev = pci_get_class(PCI_CLASS_DISPLAY_VGA << 8, pdev))) {
-		/* Multiple video card workaround */
 		if (pdev->vendor != PCI_VENDOR_ID_LOONGSON) {
 			pr_info("Discrete graphic card detected, abort\n");
 			return 0;

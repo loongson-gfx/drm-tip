@@ -57,7 +57,10 @@ static void lsdc_crtc_reset(struct drm_crtc *crtc)
 	struct drm_device *ddev = crtc->dev;
 	struct lsdc_device *ldev = to_lsdc(ddev);
 	struct lsdc_crtc_state *priv_crtc_state;
-	u32 val = LSDC_PF_XRGB8888 | LSDC_DMA_STEP_64_BYTES | CFG_RESET_N;
+	u32 val = LSDC_PF_XRGB8888 | CFG_RESET_N;
+
+	if (ldev->descp->chip == CHIP_LS7A2000)
+		val |= LSDC_DMA_STEP_64_BYTES;
 
 	lsdc_crtc_wreg32(ldev, LSDC_CRTC0_CFG_REG, drm_crtc_index(crtc), val);
 
@@ -123,7 +126,7 @@ static const struct drm_crtc_funcs lsdc_crtc_funcs_array[2][LSDC_NUM_CRTC] = {
 		},
 		{
 			LSDC_CRTC_FUNCS_GEN(pipe1, NULL),
-		},
+		}
 	},
 	{
 		{

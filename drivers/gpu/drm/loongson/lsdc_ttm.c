@@ -3,8 +3,6 @@
 #include <drm/drm_drv.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_managed.h>
-#include <drm/ttm/ttm_range_manager.h>
-#include <drm/ttm/ttm_tt.h>
 
 #include "lsdc_drv.h"
 #include "lsdc_ttm.h"
@@ -16,8 +14,9 @@ static void lsdc_ttm_tt_destroy(struct ttm_device *bdev, struct ttm_tt *tt)
 }
 
 static struct ttm_tt *
-lsdc_ttm_tt_create(struct ttm_buffer_object *bo, uint32_t page_flags)
+lsdc_ttm_tt_create(struct ttm_buffer_object *tbo, uint32_t page_flags)
 {
+	struct drm_device *ddev = tbo->base.dev;
 	struct ttm_tt *tt;
 	int ret;
 
@@ -25,49 +24,33 @@ lsdc_ttm_tt_create(struct ttm_buffer_object *bo, uint32_t page_flags)
 	if (!tt)
 		return NULL;
 
-	ret = ttm_tt_init(tt, bo, page_flags, ttm_cached, 0);
+	ret = ttm_tt_init(tt, tbo, page_flags, ttm_cached, 0);
 	if (ret < 0) {
 		kfree(tt);
 		return NULL;
 	}
 
+#if 1
+	drm_info(ddev, "ttm_tt create\n");
+#endif
+
 	return tt;
-}
-
-void lsdc_bo_set_placement(struct ttm_buffer_object *tbo, u32 domain, u32 flags)
-{
-	struct lsdc_bo *lbo = to_lsdc_bo(tbo);
-	unsigned int i;
-	unsigned int c = 0;
-
-	lbo->placement.placement = lbo->placements;
-	lbo->placement.busy_placement = lbo->placements;
-
-	if (domain & LSDC_GEM_DOMAIN_VRAM) {
-		lbo->placements[c].mem_type = TTM_PL_VRAM;
-		lbo->placements[c++].flags = flags;
-	}
-
-	if (domain & LSDC_GEM_DOMAIN_SYSTEM || !c) {
-		lbo->placements[c].mem_type = TTM_PL_SYSTEM;
-		lbo->placements[c++].flags = flags;
-	}
-
-	lbo->placement.num_placement = c;
-	lbo->placement.num_busy_placement = c;
-
-	for (i = 0; i < c; ++i) {
-		lbo->placements[i].fpfn = 0;
-		lbo->placements[i].lpfn = 0;
-	}
 }
 
 static void lsdc_bo_evict_flags(struct ttm_buffer_object *tbo,
 				struct ttm_placement *placement)
 {
 	struct lsdc_bo *lbo = to_lsdc_bo(tbo);
+	struct drm_device *ddev = tbo->base.dev;
 
-	lsdc_bo_set_placement(tbo, LSDC_GEM_DOMAIN_SYSTEM, 0);
+	if (!lsdc_bo_is_ttm_bo(tbo)) {
+#if 1
+		drm_info(ddev, "is not a ttm bo\n");
+#endif
+		return;
+	}
+
+	lsdc_bo_set_placement(lbo, LSDC_GEM_DOMAIN_SYSTEM, 0);
 
 	*placement = lbo->placement;
 }
@@ -81,14 +64,14 @@ static int lsdc_bo_move(struct ttm_buffer_object *tbo,
 	struct lsdc_bo *lbo = to_lsdc_bo(tbo);
 	struct drm_device *ddev = tbo->base.dev;
 
+	drm_info(ddev, "move to %u\n", new_mem->placement);
+
 	if (drm_WARN_ON_ONCE(ddev, lbo->vmap_use_count))
 		goto just_move_it;
 
 	ttm_bo_vunmap(tbo, &lbo->map);
 	/* explicitly clear mapping for next vmap call */
 	iosys_map_clear(&lbo->map);
-
-	drm_dbg(ddev, "%s: evict: %s\n", __func__, evict ? "Yes" : "No");
 
 just_move_it:
 	return ttm_bo_move_memcpy(tbo, ctx, new_mem);
@@ -98,6 +81,13 @@ static void lsdc_bo_delete_mem_notify(struct ttm_buffer_object *tbo)
 {
 	struct lsdc_bo *lbo = to_lsdc_bo(tbo);
 	struct drm_device *ddev = tbo->base.dev;
+
+	if (!lsdc_bo_is_ttm_bo(tbo)) {
+#if 1
+		drm_info(ddev, "is not a ttm bo\n");
+#endif
+		return;
+	}
 
 	if (drm_WARN_ON_ONCE(ddev, lbo->vmap_use_count))
 		return;
@@ -109,11 +99,13 @@ static void lsdc_bo_delete_mem_notify(struct ttm_buffer_object *tbo)
 static int lsdc_bo_reserve_io_mem(struct ttm_device *bdev,
 				  struct ttm_resource *mem)
 {
-	struct lsdc_device *ldev = tdev_to_lsdc(bdev);
+	struct lsdc_device *ldev = tdev_to_ldev(bdev);
 
 	switch (mem->mem_type) {
 	case TTM_PL_SYSTEM:
 		/* nothing to do */
+		break;
+	case TTM_PL_TT:
 		break;
 	case TTM_PL_VRAM:
 		mem->bus.offset = (mem->start << PAGE_SHIFT) + ldev->vram_base;
@@ -137,11 +129,36 @@ static struct ttm_device_funcs lsdc_bo_driver = {
 	.io_mem_reserve = lsdc_bo_reserve_io_mem,
 };
 
-static void lsdc_bo_free(struct drm_gem_object *gem)
+void lsdc_bo_set_placement(struct lsdc_bo *lbo, u32 domain, u32 flags)
 {
-	struct ttm_buffer_object *tbo = to_ttm_bo(gem);
+	unsigned int i;
+	unsigned int c = 0;
 
-	ttm_bo_put(tbo);
+	lbo->placement.placement = lbo->placements;
+	lbo->placement.busy_placement = lbo->placements;
+
+	if (domain & LSDC_GEM_DOMAIN_VRAM) {
+		lbo->placements[c].mem_type = TTM_PL_VRAM;
+		lbo->placements[c++].flags = flags;
+	}
+#if 1
+	if (domain & LSDC_GEM_DOMAIN_GTT) {
+		lbo->placements[c].mem_type = TTM_PL_TT;
+		lbo->placements[c++].flags = flags;
+	}
+#endif
+	if (domain & LSDC_GEM_DOMAIN_SYSTEM || !c) {
+		lbo->placements[c].mem_type = TTM_PL_SYSTEM;
+		lbo->placements[c++].flags = flags;
+	}
+
+	lbo->placement.num_placement = c;
+	lbo->placement.num_busy_placement = c;
+
+	for (i = 0; i < c; ++i) {
+		lbo->placements[i].fpfn = 0;
+		lbo->placements[i].lpfn = 0;
+	}
 }
 
 int lsdc_bo_pin(struct drm_gem_object *gem)
@@ -151,10 +168,8 @@ int lsdc_bo_pin(struct drm_gem_object *gem)
 	int ret;
 
 	ret = ttm_bo_reserve(tbo, true, false, NULL);
-	if (ret) {
-		drm_err(gem->dev, "%s: %d\n", __func__, ret);
+	if (ret)
 		return ret;
-	}
 
 	if (tbo->pin_count == 0) {
 		struct ttm_operation_ctx ctx = { false, false };
@@ -162,7 +177,6 @@ int lsdc_bo_pin(struct drm_gem_object *gem)
 		ret = ttm_bo_validate(tbo, &lbo->placement, &ctx);
 		if (ret < 0) {
 			ttm_bo_unreserve(tbo);
-			drm_err(gem->dev, "%s: %d\n", __func__, ret);
 			return ret;
 		}
 	}
@@ -180,155 +194,11 @@ void lsdc_bo_unpin(struct drm_gem_object *gem)
 	int ret;
 
 	ret = ttm_bo_reserve(tbo, true, false, NULL);
-	if (ret) {
-		drm_err(gem->dev, "%s: bo reserve failed\n", __func__);
+	if (ret)
 		return;
-	}
 
 	ttm_bo_unpin(tbo);
 	ttm_bo_unreserve(tbo);
-}
-
-static int lsdc_bo_vmap(struct drm_gem_object *gem, struct iosys_map *map)
-{
-	struct drm_device *ddev = gem->dev;
-	struct ttm_buffer_object *tbo = to_ttm_bo(gem);
-	struct lsdc_bo *lbo = to_lsdc_bo(tbo);
-	int ret;
-
-	dma_resv_assert_held(gem->resv);
-
-	if (tbo->pin_count == 0) {
-		struct ttm_operation_ctx ctx = { false, false };
-
-		ret = ttm_bo_validate(tbo, &lbo->placement, &ctx);
-		if (ret < 0)
-			return ret;
-	}
-
-	ttm_bo_pin(tbo);
-
-	if (lbo->vmap_use_count > 0) {
-		drm_dbg(ddev, "%s: already mapped\n", __func__);
-		goto finish;
-	}
-
-	/* Only vmap if the there's no mapping present */
-	if (iosys_map_is_null(&lbo->map)) {
-		ret = ttm_bo_vmap(tbo, &lbo->map);
-		if (ret) {
-			ttm_bo_unpin(tbo);
-			return ret;
-		}
-	}
-
-finish:
-	++lbo->vmap_use_count;
-	*map = lbo->map;
-
-	return 0;
-}
-
-static void lsdc_bo_vunmap(struct drm_gem_object *gem, struct iosys_map *map)
-{
-	struct drm_device *ddev = gem->dev;
-	struct ttm_buffer_object *tbo = to_ttm_bo(gem);
-	struct lsdc_bo *lbo = to_lsdc_bo(tbo);
-
-	dma_resv_assert_held(gem->resv);
-
-	if (drm_WARN_ON_ONCE(ddev, !lbo->vmap_use_count))
-		return;
-
-	if (drm_WARN_ON_ONCE(ddev, !iosys_map_is_equal(&lbo->map, map)))
-		return; /* BUG: map not mapped from this BO */
-
-	if (--lbo->vmap_use_count > 0)
-		return;
-
-	/* We delay the actual unmap operation until the BO gets evicted */
-	ttm_bo_unpin(tbo);
-}
-
-static int lsdc_bo_mmap(struct drm_gem_object *gem,
-			struct vm_area_struct *vma)
-{
-	struct ttm_buffer_object *tbo = to_ttm_bo(gem);
-	int ret;
-
-	ret = ttm_bo_mmap_obj(vma, tbo);
-	if (ret < 0)
-		return ret;
-
-	/*
-	 * ttm has its own object refcounting, so drop gem reference
-	 * to avoid double accounting counting.
-	 */
-	drm_gem_object_put(gem);
-
-	return 0;
-}
-
-static const struct drm_gem_object_funcs lsdc_gem_object_funcs = {
-	.free   = lsdc_bo_free,
-	.pin    = lsdc_bo_pin,
-	.unpin  = lsdc_bo_unpin,
-	.vmap   = lsdc_bo_vmap,
-	.vunmap = lsdc_bo_vunmap,
-	.mmap   = lsdc_bo_mmap,
-};
-
-static void lsdc_bo_destroy(struct ttm_buffer_object *tbo)
-{
-	struct lsdc_bo *lbo = to_lsdc_bo(tbo);
-
-	WARN_ON(lbo->vmap_use_count);
-	WARN_ON(iosys_map_is_set(&lbo->map));
-
-	drm_gem_object_release(&tbo->base);
-
-	kfree(lbo);
-}
-
-static struct lsdc_bo *lsdc_bo_create(struct drm_device *ddev, size_t size)
-{
-	struct lsdc_device *ldev = to_lsdc(ddev);
-	struct ttm_device *bdev = &ldev->bdev;
-	struct lsdc_bo *lbo;
-	struct ttm_buffer_object *tbo;
-	struct drm_gem_object *gem;
-	int ret;
-
-	lbo = kzalloc(sizeof(*lbo), GFP_KERNEL);
-	if (!lbo)
-		return ERR_PTR(-ENOMEM);
-
-	tbo = &lbo->tbo;
-	gem = &tbo->base;
-	gem->funcs = &lsdc_gem_object_funcs;
-
-	ret = drm_gem_object_init(ddev, gem, size);
-	if (ret) {
-		kfree(lbo);
-		return ERR_PTR(ret);
-	}
-
-	tbo->bdev = bdev;
-	lsdc_bo_set_placement(tbo, LSDC_GEM_DOMAIN_SYSTEM, 0);
-
-	ret = ttm_bo_init_validate(bdev,
-				   tbo,
-				   ttm_bo_type_device,
-				   &lbo->placement,
-				   0,
-				   false, NULL, NULL,
-				   lsdc_bo_destroy);
-	if (ret) {
-		kfree(lbo);
-		return ERR_PTR(ret);
-	}
-
-	return lbo;
 }
 
 u64 lsdc_bo_gpu_offset(struct ttm_buffer_object *tbo)
@@ -344,64 +214,78 @@ u64 lsdc_bo_gpu_offset(struct ttm_buffer_object *tbo)
 	return resource->start << PAGE_SHIFT;
 }
 
-int lsdc_dumb_create(struct drm_file *file,
-		     struct drm_device *ddev,
-		     struct drm_mode_create_dumb *args)
+unsigned long lsdc_bo_size(struct lsdc_bo *lbo)
+{
+	return lbo->tbo.base.size;
+}
+
+static void lsdc_bo_destroy(struct ttm_buffer_object *tbo)
+{
+	struct lsdc_bo *lbo = to_lsdc_bo(tbo);
+
+	WARN_ON(lbo->vmap_use_count);
+	WARN_ON(iosys_map_is_set(&lbo->map));
+
+	drm_gem_object_release(&tbo->base);
+
+	kfree(lbo);
+}
+
+struct lsdc_bo *lsdc_bo_create(struct drm_device *ddev,
+			       u32 domain,
+			       u32 flags,
+			       size_t size,
+			       struct sg_table *sg,
+			       struct dma_resv *resv)
 {
 	struct lsdc_device *ldev = to_lsdc(ddev);
-	const struct lsdc_desc *descp = ldev->descp;
-	size_t pitch, size;
-	struct lsdc_bo *lbo;
+	struct ttm_device *bdev = &ldev->bdev;
 	struct ttm_buffer_object *tbo;
-	u32 handle;
+	struct lsdc_bo *lbo;
+	enum ttm_bo_type bo_type;
 	int ret;
 
-	pitch = args->width * DIV_ROUND_UP(args->bpp, 8);
-	pitch = ALIGN(pitch, descp->pitch_align);
-	size = pitch * args->height;
-	size = roundup(size, PAGE_SIZE);
-	if (!size)
-		return -EINVAL;
+	lbo = kzalloc(sizeof(*lbo), GFP_KERNEL);
+	if (!lbo)
+		return ERR_PTR(-ENOMEM);
 
-	lbo = lsdc_bo_create(ddev, size);
-	if (IS_ERR(lbo))
-		return PTR_ERR(lbo);
+	lsdc_bo_set_placement(lbo, domain, flags);
 
 	tbo = &lbo->tbo;
 
-	ret = drm_gem_handle_create(file, &tbo->base, &handle);
-	if (ret)
-		goto err_drm_gem_object_put;
+	ret = drm_gem_object_init(ddev, &tbo->base, size);
+	if (ret) {
+		kfree(lbo);
+		return ERR_PTR(ret);
+	}
 
-	drm_gem_object_put(&tbo->base);
+	tbo->bdev = bdev;
 
-	args->pitch = pitch;
-	args->size = size;
-	args->handle = handle;
+	if (sg)
+		bo_type = ttm_bo_type_sg;
+	else
+		bo_type = ttm_bo_type_device;
 
-	return 0;
+	ret = ttm_bo_init_validate(bdev,
+				   tbo,
+				   bo_type,
+				   &lbo->placement,
+				   0,
+				   false,
+				   sg,
+				   resv,
+				   lsdc_bo_destroy);
+	if (ret) {
+		kfree(lbo);
+		return ERR_PTR(ret);
+	}
 
-err_drm_gem_object_put:
-	drm_gem_object_put(&tbo->base);
-	return ret;
+	return lbo;
 }
 
-int lsdc_dumb_map_offset(struct drm_file *file,
-			 struct drm_device *ddev,
-			 u32 handle,
-			 uint64_t *offset)
+bool lsdc_bo_is_ttm_bo(struct ttm_buffer_object *tbo)
 {
-	struct drm_gem_object *gem;
-
-	gem = drm_gem_object_lookup(file, handle);
-	if (!gem)
-		return -ENOENT;
-
-	*offset = drm_vma_node_offset_addr(&gem->vma_node);
-
-	drm_gem_object_put(gem);
-
-	return 0;
+	return (tbo->destroy == &lsdc_bo_destroy);
 }
 
 static void lsdc_ttm_fini(struct drm_device *ddev, void *data)

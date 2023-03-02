@@ -444,9 +444,7 @@ const struct drm_encoder_helper_funcs ls7a2000_hdmi_encoder_helper_funcs = {
  * 3) Still have boards export three output(2 hdmi + 1 vga).
  *
  * So let's hook hdmi helper funcs to all display pipe, don't miss.
- * writing hdmi register do no harm, except wasting a few cpu's time
- * on the case which the motherboard don't export hdmi interface on
- * display pipe 0.
+ * writing hdmi register do no harms.
  */
 static int ls7a2000_output_init(struct lsdc_device *ldev,
 				struct lsdc_display_pipe *dispipe,
@@ -522,7 +520,7 @@ static int ls7a1000_output_init(struct lsdc_device *ldev,
 	if (ret)
 		return ret;
 
-	drm_info(ddev, "display pipe-%u has DVO\n", dispipe->index);
+	drm_info(ddev, "display pipe-%u has a DVO\n", dispipe->index);
 
 	drm_connector_helper_add(connector, &lsdc_connector_helpers);
 

@@ -23,19 +23,7 @@ static const u64 lsdc_fb_format_modifiers[] = {
 	DRM_FORMAT_MOD_INVALID
 };
 
-static unsigned int lsdc_get_fb_offset(struct drm_framebuffer *fb,
-				       struct drm_plane_state *state,
-				       unsigned int plane)
-{
-	unsigned int offset = fb->offsets[plane];
-
-	offset += fb->format->cpp[plane] * (state->src_x >> 16);
-	offset += fb->pitches[plane] * (state->src_y >> 16);
-
-	return offset;
-}
-
-static int lsdc_check_cursor_plane(struct drm_plane *plane,
+static int lsdc_cursor_atomic_check(struct drm_plane *plane,
 				   struct drm_atomic_state *state)
 {
 	struct drm_plane_state *new_plane_state = drm_atomic_get_new_plane_state(state, plane);
@@ -55,8 +43,8 @@ static int lsdc_check_cursor_plane(struct drm_plane *plane,
 						   true);
 }
 
-static int lsdc_check_primary_plane(struct drm_plane *plane,
-				    struct drm_atomic_state *state)
+static int lsdc_primary_atomic_check(struct drm_plane *plane,
+				     struct drm_atomic_state *state)
 {
 	struct drm_plane_state *new_plane_state = drm_atomic_get_new_plane_state(state, plane);
 	struct drm_crtc *crtc = new_plane_state->crtc;
@@ -75,8 +63,19 @@ static int lsdc_check_primary_plane(struct drm_plane *plane,
 						   true);
 }
 
-static void lsdc_update_primary_plane(struct drm_plane *plane,
-				      struct drm_atomic_state *state)
+static unsigned int lsdc_get_fb_offset(struct drm_framebuffer *fb,
+				       struct drm_plane_state *state)
+{
+	unsigned int offset = fb->offsets[0];
+
+	offset += fb->format->cpp[0] * (state->src_x >> 16);
+	offset += fb->pitches[0] * (state->src_y >> 16);
+
+	return offset;
+}
+
+static void lsdc_primary_atomic_update(struct drm_plane *plane,
+				       struct drm_atomic_state *state)
 {
 	struct drm_device *ddev = plane->dev;
 	struct lsdc_device *ldev = to_lsdc(ddev);
@@ -85,7 +84,7 @@ static void lsdc_update_primary_plane(struct drm_plane *plane,
 	struct drm_framebuffer *fb = new_plane_state->fb;
 	struct ttm_buffer_object *tbo = to_ttm_bo(fb->obj[0]);
 	unsigned int pipe = drm_crtc_index(crtc);
-	unsigned int fb_offset = lsdc_get_fb_offset(fb, new_plane_state, 0);
+	unsigned int fb_offset = lsdc_get_fb_offset(fb, new_plane_state);
 	u64 bo_offset = lsdc_bo_gpu_offset(tbo);
 	u64 fb_addr = ldev->vram_base + bo_offset + fb_offset;
 	u32 stride = fb->pitches[0];
@@ -98,16 +97,12 @@ static void lsdc_update_primary_plane(struct drm_plane *plane,
 
 	cfg = lsdc_crtc_rreg32(ldev, LSDC_CRTC0_CFG_REG, pipe);
 	if (cfg & CFG_FB_IN_USING) {
-		drm_dbg(ddev, "CRTC-%u(FB1) is in using\n", pipe);
 		lsdc_crtc_wreg32(ldev, LSDC_CRTC0_FB1_LO_ADDR_REG, pipe, lo);
 		lsdc_crtc_wreg32(ldev, LSDC_CRTC0_FB1_HI_ADDR_REG, pipe, hi);
 	} else {
-		drm_dbg(ddev, "CRTC-%u(FB0) is in using\n", pipe);
 		lsdc_crtc_wreg32(ldev, LSDC_CRTC0_FB0_LO_ADDR_REG, pipe, lo);
 		lsdc_crtc_wreg32(ldev, LSDC_CRTC0_FB0_HI_ADDR_REG, pipe, hi);
 	}
-
-	drm_dbg(ddev, "CRTC-%u scanout from 0x%llx\n", pipe, fb_addr);
 
 	lsdc_crtc_wreg32(ldev, LSDC_CRTC0_STRIDE_REG, pipe, stride);
 
@@ -117,8 +112,8 @@ static void lsdc_update_primary_plane(struct drm_plane *plane,
 	lsdc_crtc_wreg32(ldev, LSDC_CRTC0_CFG_REG, pipe, cfg);
 }
 
-static void lsdc_disable_primary_plane(struct drm_plane *plane,
-				       struct drm_atomic_state *state)
+static void lsdc_primary_atomic_disable(struct drm_plane *plane,
+					struct drm_atomic_state *state)
 {
 	/* Do nothing, just prevent call into atomic_update().
 	 * Writing the format as LSDC_PF_NONE can disable the primary,
@@ -127,60 +122,40 @@ static void lsdc_disable_primary_plane(struct drm_plane *plane,
 	drm_dbg(plane->dev, "%s disabled\n", plane->name);
 }
 
-static void lsdc_ttm_cleanup_fb(struct drm_plane *plane,
-				struct drm_plane_state *state,
-				unsigned int np)
-{
-	struct drm_gem_object *obj;
-	struct drm_framebuffer *fb = state->fb;
-
-	while (np) {
-		--np;
-		obj = fb->obj[np];
-		if (!obj) {
-			drm_err(plane->dev, "%s: no obj\n", plane->name);
-			continue;
-		}
-		lsdc_bo_unpin(obj);
-	}
-}
-
 static int lsdc_plane_prepare_fb(struct drm_plane *plane,
 				 struct drm_plane_state *new_state)
 {
 	struct drm_framebuffer *fb = new_state->fb;
-	struct ttm_buffer_object *tbo;
+	struct lsdc_bo *lbo;
 	struct drm_gem_object *obj;
-	unsigned int i;
+	u32 flags = TTM_PL_FLAG_CONTIGUOUS;
 	int ret;
 
 	if (!fb)
 		return 0;
 
-	for (i = 0; i < fb->format->num_planes; ++i) {
-		obj = fb->obj[i];
-		if (!obj) {
-			ret = -EINVAL;
-			goto err_ret;
-		}
-		tbo = to_ttm_bo(obj);
+	if (plane->type == DRM_PLANE_TYPE_CURSOR)
+		flags |= TTM_PL_FLAG_TOPDOWN;
 
-		lsdc_bo_set_placement(tbo, LSDC_GEM_DOMAIN_VRAM, TTM_PL_FLAG_CONTIGUOUS);
-
-		ret = lsdc_bo_pin(obj);
-		if (ret)
-			goto err_ret;
+	obj = fb->obj[0];
+	if (!obj) {
+		drm_err(plane->dev, "%s: no obj\n", plane->name);
+		return -EINVAL;
 	}
+
+	lbo = gem_to_lsdc_bo(obj);
+
+	lsdc_bo_set_placement(lbo, LSDC_GEM_DOMAIN_VRAM, flags);
+
+	ret = lsdc_bo_pin(obj);
+	if (ret)
+		return ret;
 
 	ret = drm_gem_plane_helper_prepare_fb(plane, new_state);
 	if (ret)
-		goto err_ret;
+		lsdc_bo_unpin(obj);
 
 	return 0;
-
-err_ret:
-	lsdc_ttm_cleanup_fb(plane, new_state, i);
-	return ret;
 }
 
 static void lsdc_plane_cleanup_fb(struct drm_plane *plane,
@@ -191,15 +166,15 @@ static void lsdc_plane_cleanup_fb(struct drm_plane *plane,
 	if (!fb)
 		return;
 
-	lsdc_ttm_cleanup_fb(plane, old_state, fb->format->num_planes);
+	lsdc_bo_unpin(fb->obj[0]);
 }
 
-static const struct drm_plane_helper_funcs lsdc_primary_plane_helpers = {
+static const struct drm_plane_helper_funcs lsdc_primary_helper_funcs = {
 	.prepare_fb = lsdc_plane_prepare_fb,
 	.cleanup_fb = lsdc_plane_cleanup_fb,
-	.atomic_check = lsdc_check_primary_plane,
-	.atomic_update = lsdc_update_primary_plane,
-	.atomic_disable = lsdc_disable_primary_plane,
+	.atomic_check = lsdc_primary_atomic_check,
+	.atomic_update = lsdc_primary_atomic_update,
+	.atomic_disable = lsdc_primary_atomic_disable,
 };
 
 /*
@@ -209,7 +184,7 @@ static const struct drm_plane_helper_funcs lsdc_primary_plane_helpers = {
  * is automatically done by hardware, the cursor is alway on the top of the
  * primary, there is no depth property can be set, pretty convenient.
  */
-static void ls7a1000_atomic_update_cursor(struct drm_plane *plane,
+static void ls7a1000_cursor_atomic_update(struct drm_plane *plane,
 					  struct drm_atomic_state *state)
 {
 	struct drm_device *ddev = plane->dev;
@@ -243,7 +218,7 @@ static void ls7a1000_atomic_update_cursor(struct drm_plane *plane,
 	lsdc_wreg32(ldev, LSDC_CURSOR0_CFG_REG, dispipe->index ? cfg | CURSOR_LOCATION : cfg);
 }
 
-static void ls7a1000_atomic_disable_cursor(struct drm_plane *plane,
+static void ls7a1000_cursor_atomic_disable(struct drm_plane *plane,
 					   struct drm_atomic_state *state)
 {
 	struct drm_device *ddev = plane->dev;
@@ -256,16 +231,16 @@ static void ls7a1000_atomic_disable_cursor(struct drm_plane *plane,
 	lsdc_wreg32(ldev, LSDC_CURSOR0_CFG_REG, cfg);
 }
 
-static const struct drm_plane_helper_funcs ls7a1000_plane_helper_cursors = {
+static const struct drm_plane_helper_funcs ls7a1000_cursor_helper_funcs = {
 	.prepare_fb = lsdc_plane_prepare_fb,
 	.cleanup_fb = lsdc_plane_cleanup_fb,
-	.atomic_check = lsdc_check_cursor_plane,
-	.atomic_update = ls7a1000_atomic_update_cursor,
-	.atomic_disable = ls7a1000_atomic_disable_cursor,
+	.atomic_check = lsdc_cursor_atomic_check,
+	.atomic_update = ls7a1000_cursor_atomic_update,
+	.atomic_disable = ls7a1000_cursor_atomic_disable,
 };
 
 /* update the format, size and location of the cursor */
-static void lsdc_atomic_update_cursor0(struct drm_plane *plane,
+static void lsdc_cursor0_atomic_update(struct drm_plane *plane,
 				       struct drm_atomic_state *state)
 {
 	struct drm_device *ddev = plane->dev;
@@ -274,7 +249,6 @@ static void lsdc_atomic_update_cursor0(struct drm_plane *plane,
 	struct drm_framebuffer *cursor_fb = new_plane_state->fb;
 	struct ttm_buffer_object *tbo = to_ttm_bo(cursor_fb->obj[0]);
 	u64 addr = ldev->vram_base + lsdc_bo_gpu_offset(tbo);
-	u32 cfg = CURSOR_FORMAT_ARGB8888 | CURSOR_SIZE_64X64;
 	int x = new_plane_state->crtc_x;
 	int y = new_plane_state->crtc_y;
 
@@ -289,11 +263,11 @@ static void lsdc_atomic_update_cursor0(struct drm_plane *plane,
 	lsdc_wreg32(ldev, LSDC_CURSOR0_ADDR_HI_REG, (addr >> 32) & 0xFF);
 	lsdc_wreg32(ldev, LSDC_CURSOR0_ADDR_LO_REG, addr);
 
-	lsdc_wreg32(ldev, LSDC_CURSOR0_CFG_REG, cfg & ~CURSOR_LOCATION);
+	lsdc_wreg32(ldev, LSDC_CURSOR0_CFG_REG, CURSOR_FORMAT_ARGB8888 | CURSOR_SIZE_64X64);
 }
 
 /* update the format, size and location of the cursor */
-static void lsdc_atomic_update_cursor1(struct drm_plane *plane,
+static void lsdc_cursor1_atomic_update(struct drm_plane *plane,
 				       struct drm_atomic_state *state)
 {
 	struct drm_device *ddev = plane->dev;
@@ -302,7 +276,6 @@ static void lsdc_atomic_update_cursor1(struct drm_plane *plane,
 	struct drm_framebuffer *cursor_fb = new_plane_state->fb;
 	struct ttm_buffer_object *tbo = to_ttm_bo(cursor_fb->obj[0]);
 	u64 addr = ldev->vram_base + lsdc_bo_gpu_offset(tbo);
-	u32 cfg = CURSOR_FORMAT_ARGB8888 | CURSOR_SIZE_64X64;
 	int x = new_plane_state->crtc_x;
 	int y = new_plane_state->crtc_y;
 
@@ -317,10 +290,11 @@ static void lsdc_atomic_update_cursor1(struct drm_plane *plane,
 	lsdc_wreg32(ldev, LSDC_CURSOR1_ADDR_HI_REG, (addr >> 32) & 0xFF);
 	lsdc_wreg32(ldev, LSDC_CURSOR1_ADDR_LO_REG, addr);
 
-	lsdc_wreg32(ldev, LSDC_CURSOR1_CFG_REG, cfg | CURSOR_LOCATION);
+	lsdc_wreg32(ldev, LSDC_CURSOR1_CFG_REG,
+		     CURSOR_FORMAT_ARGB8888 | CURSOR_SIZE_64X64 | CURSOR_LOCATION);
 }
 
-static void lsdc_atomic_disable_cursor0(struct drm_plane *plane,
+static void lsdc_cursor0_atomic_disable(struct drm_plane *plane,
 					struct drm_atomic_state *state)
 {
 	struct drm_device *ddev = plane->dev;
@@ -333,7 +307,7 @@ static void lsdc_atomic_disable_cursor0(struct drm_plane *plane,
 	lsdc_wreg32(ldev, LSDC_CURSOR0_CFG_REG, cfg);
 }
 
-static void lsdc_atomic_disable_cursor1(struct drm_plane *plane,
+static void lsdc_cursor1_atomic_disable(struct drm_plane *plane,
 					struct drm_atomic_state *state)
 {
 	struct drm_device *ddev = plane->dev;
@@ -346,21 +320,20 @@ static void lsdc_atomic_disable_cursor1(struct drm_plane *plane,
 	lsdc_wreg32(ldev, LSDC_CURSOR1_CFG_REG, cfg);
 }
 
-/* for ls7a2000 */
-static const struct drm_plane_helper_funcs lsdc_plane_helper_cursors[2] = {
+static const struct drm_plane_helper_funcs ls7a2000_cursor_helper_funcs[2] = {
 	{
 		.prepare_fb = lsdc_plane_prepare_fb,
 		.cleanup_fb = lsdc_plane_cleanup_fb,
-		.atomic_check = lsdc_check_cursor_plane,
-		.atomic_update = lsdc_atomic_update_cursor0,
-		.atomic_disable = lsdc_atomic_disable_cursor0,
+		.atomic_check = lsdc_cursor_atomic_check,
+		.atomic_update = lsdc_cursor0_atomic_update,
+		.atomic_disable = lsdc_cursor0_atomic_disable,
 	},
 	{
 		.prepare_fb = lsdc_plane_prepare_fb,
 		.cleanup_fb = lsdc_plane_cleanup_fb,
-		.atomic_check = lsdc_check_cursor_plane,
-		.atomic_update = lsdc_atomic_update_cursor1,
-		.atomic_disable = lsdc_atomic_disable_cursor1,
+		.atomic_check = lsdc_cursor_atomic_check,
+		.atomic_update = lsdc_cursor1_atomic_update,
+		.atomic_disable = lsdc_cursor1_atomic_disable,
 	}
 };
 
@@ -387,11 +360,12 @@ int lsdc_primary_plane_init(struct lsdc_device *ldev,
 				       ARRAY_SIZE(lsdc_primary_formats),
 				       lsdc_fb_format_modifiers,
 				       DRM_PLANE_TYPE_PRIMARY,
-				       "primary-%u", index);
+				       "primary-%u",
+				       index);
 	if (ret)
 		return ret;
 
-	drm_plane_helper_add(plane, &lsdc_primary_plane_helpers);
+	drm_plane_helper_add(plane, &lsdc_primary_helper_funcs);
 
 	return 0;
 }
@@ -416,11 +390,11 @@ int lsdc_cursor_plane_init(struct lsdc_device *ldev,
 	if (ret)
 		return ret;
 
-	/* The hw cursor become standard from ls7a2000(including ls2k2000) */
+	/* The hw cursor become normal since ls7a2000(including ls2k2000) */
 	if (descp->chip == CHIP_LS7A2000)
-		drm_plane_helper_add(plane, &lsdc_plane_helper_cursors[index]);
+		drm_plane_helper_add(plane, &ls7a2000_cursor_helper_funcs[index]);
 	else
-		drm_plane_helper_add(plane, &ls7a1000_plane_helper_cursors);
+		drm_plane_helper_add(plane, &ls7a1000_cursor_helper_funcs);
 
 	return 0;
 }

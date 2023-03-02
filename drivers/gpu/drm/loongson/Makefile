@@ -4,6 +4,7 @@ loongson-y := \
 	lsdc_crtc.o \
 	lsdc_debugfs.o \
 	lsdc_drv.o \
+	lsdc_gem.o \
 	lsdc_i2c.o \
 	lsdc_irq.o \
 	lsdc_output.o \

@@ -5,6 +5,7 @@
 #include <drm/drm_managed.h>
 
 #include "lsdc_drv.h"
+#include "lsdc_gem.h"
 
 #ifdef CONFIG_DEBUG_FS
 
@@ -75,8 +76,6 @@ static const struct {
 	u32 reg_offset;
 } lsdc_regs_array[] = {
 	REG_DEF(CURSOR0_CFG),
-	REG_DEF(CURSOR0_ADDR_LO),
-	REG_DEF(CURSOR0_ADDR_HI),
 	REG_DEF(CURSOR0_POSITION),
 	REG_DEF(CURSOR0_BG_COLOR),
 	REG_DEF(CURSOR0_FG_COLOR),
@@ -146,7 +145,7 @@ static int lsdc_show_scan_position(struct seq_file *m, void *arg)
 	return 0;
 }
 
-static int lsdc_show_fb_addr(struct seq_file *m, void *arg)
+static int lsdc_show_primary_addr(struct seq_file *m, void *arg)
 {
 	struct drm_info_node *node = (struct drm_info_node *)m->private;
 	struct drm_device *ddev = node->minor->dev;
@@ -175,6 +174,25 @@ static int lsdc_show_fb_addr(struct seq_file *m, void *arg)
 		hi = lsdc_rreg32(ldev, LSDC_CRTC1_FB0_HI_ADDR_REG);
 		seq_printf(m, "CRTC-1 using fb0: 0x%x:%x\n", hi, lo);
 	}
+
+	return 0;
+}
+
+/* To see if TTM_PL_FLAG_TOPDOWN works */
+static int lsdc_show_cursor_addr(struct seq_file *m, void *arg)
+{
+	struct drm_info_node *node = (struct drm_info_node *)m->private;
+	struct drm_device *ddev = node->minor->dev;
+	struct lsdc_device *ldev = to_lsdc(ddev);
+	u32 lo, hi;
+
+	lo = lsdc_rreg32(ldev, LSDC_CURSOR0_ADDR_LO_REG);
+	hi = lsdc_rreg32(ldev, LSDC_CURSOR0_ADDR_HI_REG);
+	seq_printf(m, "CURSOR0: 0x%x:%x\n", hi, lo);
+
+	lo = lsdc_rreg32(ldev, LSDC_CURSOR1_ADDR_LO_REG);
+	hi = lsdc_rreg32(ldev, LSDC_CURSOR1_ADDR_HI_REG);
+	seq_printf(m, "CURSOR1: 0x%x:%x\n", hi, lo);
 
 	return 0;
 }
@@ -212,15 +230,16 @@ static int lsdc_trigger_flip_fb(struct seq_file *m, void *arg)
 }
 
 static struct drm_info_list lsdc_debugfs_list[] = {
-	{ "chip",     lsdc_identify, 0, NULL },
-	{ "clocks",   lsdc_show_clock, 0 },
-	{ "mm",       lsdc_show_mm, 0, NULL },
-	{ "regs",     lsdc_show_regs, 0 },
-	{ "vblanks",  lsdc_show_vblank_counter, 0, NULL },
-	{ "scan_pos", lsdc_show_scan_position, 0, NULL },
-	{ "fb_addr",  lsdc_show_fb_addr, 0, NULL },
-	{ "stride",   lsdc_show_stride, 0, NULL },
-	{ "flip",     lsdc_trigger_flip_fb, 0, NULL },
+	{ "chip",        lsdc_identify, 0, NULL },
+	{ "clocks",      lsdc_show_clock, 0 },
+	{ "mm",          lsdc_show_mm, 0, NULL },
+	{ "regs",        lsdc_show_regs, 0 },
+	{ "vblanks",     lsdc_show_vblank_counter, 0, NULL },
+	{ "scan_pos",    lsdc_show_scan_position, 0, NULL },
+	{ "fb_addr",     lsdc_show_primary_addr, 0, NULL },
+	{ "cursor_addr", lsdc_show_cursor_addr, 0, NULL },
+	{ "flip",        lsdc_trigger_flip_fb, 0, NULL },
+	{ "stride",      lsdc_show_stride, 0, NULL },
 };
 
 #endif
@@ -228,6 +247,8 @@ static struct drm_info_list lsdc_debugfs_list[] = {
 void lsdc_debugfs_init(struct drm_minor *minor)
 {
 #ifdef CONFIG_DEBUG_FS
+	lsdc_gem_debugfs_init(minor);
+
 	drm_debugfs_create_files(lsdc_debugfs_list,
 				 ARRAY_SIZE(lsdc_debugfs_list),
 				 minor->debugfs_root,
